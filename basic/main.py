@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import shutil
 from pprint import pprint
 
@@ -15,9 +16,13 @@ from basic.model import get_multi_gpu_models
 from basic.trainer import MultiGPUTrainer
 from basic.read_data import read_data, get_squad_data_filter, update_config
 from my.tensorflow import get_num_params
+import squad.evaluate as eval_official
 
+import my.hyperdrive_utils as hyperdrive_utils
 
 def main(config):
+    hyperdrive_utils.initialize(sys.argv)
+
     set_dirs(config)
     with tf.device(config.device):
         if config.mode == 'train':
@@ -78,6 +83,8 @@ def _train(config):
                         for idx in range(config.word_vocab_size)])
     config.emb_mat = emb_mat
 
+    dataset = _load_dev_v1_1(config)
+
     # construct model graph and variables (using default graph)
     pprint(config.__flags, indent=2)
     models = get_multi_gpu_models(config)
@@ -103,13 +110,16 @@ def _train(config):
             graph_handler.add_summary(summary, global_step)
 
         # occasional saving
+        model_save_path = None
         if global_step % config.save_period == 0:
-            graph_handler.save(sess, global_step=global_step)
+            model_save_path = graph_handler.save(sess, global_step=global_step)
 
         if not config.eval:
             continue
+
         # Occasional evaluation
         if global_step % config.eval_period == 0:
+            print("Global Steps is ",global_step)
             num_steps = math.ceil(dev_data.num_examples / (config.batch_size * config.num_gpus))
             if 0 < config.val_num_batches < num_steps:
                 num_steps = config.val_num_batches
@@ -125,6 +135,12 @@ def _train(config):
                 graph_handler.dump_eval(e_dev)
             if config.dump_answer:
                 graph_handler.dump_answer(e_dev)
+
+            # Report metrics to hyperdrive
+            sequence_num = global_step / config.eval_period
+            e_dev_official = eval_official.evaluate(dataset, e_dev.id2answer_dict)
+            hyperdrive_utils.report(sequence_num, e_dev_official, e_dev, e_train, model_save_path)
+
     if global_step % config.save_period != 0:
         graph_handler.save(sess, global_step=global_step)
 
@@ -173,8 +189,19 @@ def _test(config):
         print("dumping eval ...")
         graph_handler.dump_eval(e)
 
+    dataset = _load_dev_v1_1(config)
+    print(json.dumps(eval_official.evaluate(dataset, e.id2answer_dict)))
 
-
+def _load_dev_v1_1(config):
+    expected_version = '1.1'
+    data_file = os.path.join(config.data_dir,"dev-v1.1.json")
+    with open(data_file) as dataset_file:
+        dataset_json = json.load(dataset_file)
+        if (dataset_json['version'] != expected_version):
+            print('Evaluation expects v-' + expected_version +
+                ', but got dataset with v-' + dataset_json['version'])
+            exit(1)
+        return dataset_json['data']
 
 def _forward(config):
     assert config.load

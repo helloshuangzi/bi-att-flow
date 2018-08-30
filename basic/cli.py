@@ -1,5 +1,4 @@
 import os
-
 import tensorflow as tf
 
 from basic.main import main as m
@@ -105,8 +104,9 @@ def main(_):
     config = flags.FLAGS
 
     config.out_dir = os.path.join(config.out_base_dir, config.model_name, str(config.run_id).zfill(2))
-
+    
     m(config)
 
 if __name__ == "__main__":
     tf.app.run()
+

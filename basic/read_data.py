@@ -9,7 +9,8 @@ import numpy as np
 
 from my.tensorflow import grouper
 from my.utils import index
-from IPython import embed
+import tensorflow as tf
+
 
 class Data(object):
     def get_size(self):
@@ -46,9 +47,6 @@ class DataSet(object):
         total_num_examples = self.get_data_size()
         self.valid_idxs = range(total_num_examples) if valid_idxs is None else valid_idxs
         self.num_examples = len(self.valid_idxs)
-
-    def set_data(self, data):
-        self.data = data
 
     def _sort_key(self, idx):
         rx = self.data['*x'][idx]
@@ -158,37 +156,33 @@ def load_metadata(config, data_type):
         return metadata
 
 
-def read_data(config, data_type, ref, data=None, data_filter=None, data_set=None):
-    if data is None:
-        data_path = os.path.join(config.data_dir, "data_{}.json".format(data_type))
-        with open(data_path, 'r') as fh:
-            data = json.load(fh)
-    if data_set is None:
-        num_examples = len(next(iter(data.values())))
-        if data_filter is None:
-            valid_idxs = range(num_examples)
-        else:
-            mask = []
-            keys = data.keys()
-            values = data.values()
-            for vals in zip(*values):
-                each = {key: val for key, val in zip(keys, vals)}
-                mask.append(data_filter(each, shared))
-            valid_idxs = [idx for idx in range(len(mask)) if mask[idx]]
+def read_data(config, data_type, ref, data_filter=None):
+    data_path = os.path.join(config.data_dir, "data_{}.json".format(data_type))
+    shared_path = os.path.join(config.data_dir, "shared_{}.json".format(data_type))
+#    with open(data_path, 'r') as fh:
+#        data = json.load(fh)
+#    with open(shared_path, 'r') as fh:
+#        shared = json.load(fh)
 
-        #print("Loaded {}/{} examples from {}".format(len(valid_idxs), num_examples, data_type))
-        shared = read_shared_data(config, data_type, ref, data_filter)
-        data_set = DataSet(data, data_type, shared=shared, valid_idxs=valid_idxs)
-    else:
-        data_set.set_data(data)
-    return data_set
-
-
-def read_shared_data(config, data_type, ref, data_filter=None):
-    shared_data_type = 'test' if data_type=='demo' else data_type
-    shared_path = os.path.join(config.data_dir, "shared_{}.json".format(shared_data_type))
-    with open(shared_path, 'r') as fh:
+    with tf.gfile.Open(data_path, 'r') as fh:
+        data = json.load(fh)
+    with tf.gfile.Open(shared_path, 'r') as fh:
         shared = json.load(fh)
+
+    num_examples = len(next(iter(data.values())))
+    if data_filter is None:
+        valid_idxs = range(num_examples)
+    else:
+        mask = []
+        keys = data.keys()
+        values = data.values()
+        for vals in zip(*values):
+            each = {key: val for key, val in zip(keys, vals)}
+            mask.append(data_filter(each, shared))
+        valid_idxs = [idx for idx in range(len(mask)) if mask[idx]]
+
+    print("Loaded {}/{} examples from {}".format(len(valid_idxs), num_examples, data_type))
+
     shared_path = config.shared_path or os.path.join(config.out_dir, "shared.json")
     if not ref:
         word2vec_dict = shared['lower_word2vec'] if config.lower_word else shared['word2vec']
@@ -213,9 +207,11 @@ def read_shared_data(config, data_type, ref, data_filter=None):
         shared['word2idx'][UNK] = 1
         shared['char2idx'][NULL] = 0
         shared['char2idx'][UNK] = 1
-        json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, open(shared_path, 'w'))
+#        json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, open(shared_path, 'w'))
+        json.dump({'word2idx': shared['word2idx'], 'char2idx': shared['char2idx']}, tf.gfile.Open(shared_path, 'w'))
     else:
-        new_shared = json.load(open(shared_path, 'r'))
+#        new_shared = json.load(open(shared_path, 'r'))
+        new_shared = json.load(tf.gfile.Open(shared_path, 'r'))
         for key, val in new_shared.items():
             shared[key] = val
 
@@ -231,7 +227,9 @@ def read_shared_data(config, data_type, ref, data_filter=None):
         # print("{}/{} unique words have corresponding glove vectors.".format(len(idx2vec_dict), len(word2idx_dict)))
         new_emb_mat = np.array([idx2vec_dict[idx] for idx in range(len(idx2vec_dict))], dtype='float32')
         shared['new_emb_mat'] = new_emb_mat
-    return shared
+
+    data_set = DataSet(data, data_type, shared=shared, valid_idxs=valid_idxs)
+    return data_set
 
 
 def get_squad_data_filter(config):
@@ -288,7 +286,6 @@ def get_squad_data_filter(config):
 
 
 def update_config(config, data_sets):
-    """
     config.max_num_sents = 0
     config.max_sent_size = 0
     config.max_ques_size = 0
@@ -315,11 +312,11 @@ def update_config(config, data_sets):
         config.max_para_size = min(config.max_para_size, config.para_size_th)
 
     config.max_word_size = min(config.max_word_size, config.word_size_th)
-    """
+
     config.char_vocab_size = len(data_sets[0].shared['char2idx'])
     config.word_emb_size = len(next(iter(data_sets[0].shared['word2vec'].values())))
     config.word_vocab_size = len(data_sets[0].shared['word2idx'])
-    print (config.word_vocab_size)
+
     if config.single:
         config.max_num_sents = 1
     if config.squash:

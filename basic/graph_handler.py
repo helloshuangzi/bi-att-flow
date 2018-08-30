@@ -9,7 +9,7 @@ from basic.evaluator import Evaluation, F1Evaluation
 from my.utils import short_floats
 
 import pickle
-
+import my.hyperdrive_utils as hyperdrive_utils
 
 class GraphHandler(object):
     def __init__(self, config, model):
@@ -23,13 +23,45 @@ class GraphHandler(object):
         sess.run(tf.global_variables_initializer())
         if self.config.load:
             self._load(sess)
+        elif hyperdrive_utils.get_checkpoint_path():
+            self._load_hyperdrive_checkpoint(sess)
 
         if self.config.mode == 'train':
             self.writer = tf.summary.FileWriter(self.config.log_dir, graph=tf.get_default_graph())
 
     def save(self, sess, global_step=None):
         saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)
-        saver.save(sess, self.save_path, global_step=global_step)
+        save_path = saver.save(sess, self.save_path, global_step=global_step)
+        return save_path
+
+
+    def _get_checkpoint_path(self, checkpoint_info):
+        """ Return checkpoint path if specified else None 
+            Handle cases where provided checkpoint path is dir or file."""
+    
+        checkpoint_path = None
+        if checkpoint_info:
+            if os.path.isdir(checkpoint_info):
+                checkpoint_state = tf.train.get_checkpoint_state(checkpoint_info)
+                checkpoint_path = checkpoint_state.model_checkpoint_path if checkpoint_state else None
+            else:
+                checkpoint_path = checkpoint_info
+    
+        return checkpoint_path
+
+    def _load_hyperdrive_checkpoint(self, sess):
+        """ Load hyperdrive provided model checkpoint. """
+
+        checkpoint_info = hyperdrive_utils.get_checkpoint_path()
+        restore_path = self._get_checkpoint_path(checkpoint_info)
+
+        if restore_path:
+            print("Loading HyperDrive model checkpoint from {}".format(restore_path))
+            vars_ = {var.name.split(":")[0]: var for var in tf.global_variables()}
+            saver = tf.train.Saver(vars_, max_to_keep=self.config.max_to_keep)
+            saver.restore(sess, restore_path)
+        else:
+            print("Failed to load HyperDrive model checkpoint using {}".format(checkpoint_info))
 
     def _load(self, sess):
         config = self.config

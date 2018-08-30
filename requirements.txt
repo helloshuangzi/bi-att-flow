@@ -1,5 +1,9 @@
-tensorflow==1.2
+#--extra-index-url http://aipkgs/repository/aiinfra/simple 
+#--trusted-host aipkgs
+--find-links=.
+hyperdrive==1.0.7
 nltk
 tqdm
 jinja2
-jupyter
+tensorflow==1.4.0
+tensorflow-gpu==1.4.0

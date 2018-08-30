@@ -9,7 +9,6 @@ from collections import Counter
 from tqdm import tqdm
 
 from squad.utils import get_word_span, get_word_idx, process_tokens
-from IPython import embed
 
 
 def main():
@@ -60,8 +59,8 @@ def prepro(args):
         os.makedirs(args.target_dir)
 
     if args.mode == 'full':
-        #prepro_each(args, 'train', out_name='train')
-        #prepro_each(args, 'dev', out_name='dev')
+        prepro_each(args, 'train', out_name='train')
+        prepro_each(args, 'dev', out_name='dev')
         prepro_each(args, 'dev', out_name='test')
     elif args.mode == 'all':
         create_all(args)
@@ -128,9 +127,6 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
     source_data = json.load(open(source_path, 'r'))
 
     q, cq, y, rx, rcx, ids, idxs = [], [], [], [], [], [], []
-    contextss = []
-    context_questions = []
-    titles = []
     na = []
     cy = []
     x, cx = [], []
@@ -140,21 +136,16 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
     start_ai = int(round(len(source_data['data']) * start_ratio))
     stop_ai = int(round(len(source_data['data']) * stop_ratio))
     for ai, article in enumerate(tqdm(source_data['data'][start_ai:stop_ai])):
+        xp, cxp = [], []
         pp = []
-        p.append(pp)
-        xp, cxp, contexts, c_questions = [], [], [], []
         x.append(xp)
         cx.append(cxp)
-        contextss.append(contexts)
-        context_questions.append(c_questions)
-        title = "[" + str(ai).zfill(2) + "] " + article['title'].replace('_', ' ')
-        titles.append(title)
+        p.append(pp)
         for pi, para in enumerate(article['paragraphs']):
             # wordss
             context = para['context']
             context = context.replace("''", '" ')
-            context = context.replace("``", '" ') #Sentences of priginal Paragraph
-            contexts.append(context)
+            context = context.replace("``", '" ')
             xi = list(map(word_tokenize, sent_tokenize(context)))
             xi = [process_tokens(tokens) for tokens in xi]  # process tokens
             # given xi, add chars
@@ -173,21 +164,76 @@ def prepro_each(args, data_type, start_ratio=0.0, stop_ratio=1.0, out_name="defa
             rxi = [ai, pi]
             assert len(x) - 1 == ai
             assert len(x[ai]) - 1 == pi
-            if ai==0: c_questions.append(para['qas'][3]['question'])
-            else: c_questions.append(para['qas'][0]['question'])
-            if args.debug:
-                break
+            for qa in para['qas']:
+                # get words
+                qi = word_tokenize(qa['question'])
+                qi = process_tokens(qi)
+                cqi = [list(qij) for qij in qi]
+                yi = []
+                cyi = []
+                answers = []
+                for answer in qa['answers']:
+                    answer_text = answer['text']
+                    answers.append(answer_text)
+                    answer_start = answer['answer_start']
+                    answer_stop = answer_start + len(answer_text)
+                    # TODO : put some function that gives word_start, word_stop here
+                    yi0, yi1 = get_word_span(context, xi, answer_start, answer_stop)
+                    # yi0 = answer['answer_word_start'] or [0, 0]
+                    # yi1 = answer['answer_word_stop'] or [0, 1]
+                    assert len(xi[yi0[0]]) > yi0[1]
+                    assert len(xi[yi1[0]]) >= yi1[1]
+                    w0 = xi[yi0[0]][yi0[1]]
+                    w1 = xi[yi1[0]][yi1[1]-1]
+                    i0 = get_word_idx(context, xi, yi0)
+                    i1 = get_word_idx(context, xi, (yi1[0], yi1[1]-1))
+                    cyi0 = answer_start - i0
+                    cyi1 = answer_stop - i1 - 1
+                    # print(answer_text, w0[cyi0:], w1[:cyi1+1])
+                    assert answer_text[0] == w0[cyi0], (answer_text, w0, cyi0)
+                    assert answer_text[-1] == w1[cyi1]
+                    assert cyi0 < 32, (answer_text, w0)
+                    assert cyi1 < 32, (answer_text, w1)
+
+                    yi.append([yi0, yi1])
+                    cyi.append([cyi0, cyi1])
+
+                if len(qa['answers']) == 0:
+                    yi.append([(0, 0), (0, 1)])
+                    cyi.append([0, 1])
+                    na.append(True)
+                else:
+                    na.append(False)
+
+                for qij in qi:
+                    word_counter[qij] += 1
+                    lower_word_counter[qij.lower()] += 1
+                    for qijk in qij:
+                        char_counter[qijk] += 1
+
+                q.append(qi)
+                cq.append(cqi)
+                y.append(yi)
+                cy.append(cyi)
+                rx.append(rxi)
+                rcx.append(rxi)
+                ids.append(qa['id'])
+                idxs.append(len(idxs))
+                answerss.append(answers)
+
+        if args.debug:
+            break
+
     word2vec_dict = get_word2vec(args, word_counter)
     lower_word2vec_dict = get_word2vec(args, lower_word_counter)
 
     # add context here
     data = {'q': q, 'cq': cq, 'y': y, '*x': rx, '*cx': rcx, 'cy': cy,
-            'idxs': idxs, 'ids': ids, 'answerss': answerss, '*p' : rx}
-    shared = {'x': x, 'cx': cx, 'p' : p,
-              'contextss' : contextss, 'context_questions' : context_questions,
-              'titles' : titles,
+            'idxs': idxs, 'ids': ids, 'answerss': answerss, '*p': rx, 'na': na}
+    shared = {'x': x, 'cx': cx, 'p': p,
               'word_counter': word_counter, 'char_counter': char_counter, 'lower_word_counter': lower_word_counter,
               'word2vec': word2vec_dict, 'lower_word2vec': lower_word2vec_dict}
+
     print("saving ...")
     save(args, data, shared, out_name)
 
